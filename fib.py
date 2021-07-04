@@ -1,11 +1,14 @@
 import cProfile
 import pstats
 
+memo: dict[int, int] = {0: 0, 1: 1}  # base cases already stored
 
+# could alternatively use @lru_cache decorator
 def fib(n: int) -> int:
-    if n < 2:
-        return n
-    return fib(n - 1) + fib(n - 2)
+    """Utilizes memoization to reduce number of recursive function calls"""
+    if n not in memo:
+        memo[n] = fib(n - 1) + fib(n - 2)
+    return memo[n]
 
 
 if __name__ == "__main__":
