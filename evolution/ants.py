@@ -1,8 +1,19 @@
+import subprocess
+import warnings
 from collections import namedtuple
 from dataclasses import dataclass
 from math import sqrt
 
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
+import seaborn as sns
+
+# Remove annoying warning from Seaborn
+warnings.filterwarnings("ignore")
+
 
 rng = np.random.default_rng()
 Node = namedtuple("Node", ["x", "y"])
@@ -17,12 +28,16 @@ class Ant:
         starting_node: int = rng.integers(0, self.node_count)
         self.visited.append(starting_node)
 
+        self.visit_matrix = np.zeros((self.node_count, self.node_count))
+
     def visit_node(self, node: int):
         self.visited.append(node)
+        self.visit_matrix[self.visited[-2], self.visited[-1]] = 1.0
 
     def visit_random_node(self):
         unvisited = list(set(range(self.node_count)) ^ set(self.visited))
         self.visited.append(rng.choice(unvisited))
+        self.visit_matrix[self.visited[-2], self.visited[-1]] = 1.0
 
     def get_visit_probabilities(
         self, pheromones: np.ndarray, distance_matrix: np.ndarray, alpha: int, beta: int,
@@ -81,15 +96,9 @@ class Colony:
         """Generates an initial colony."""
         n_ants = round(len(nodes) * ants_factor)
         self.ants = [Ant(nodes) for _ in range(n_ants)]
-        self.best_ant: Ant = rng.choice(self.ants)
 
     def __iter__(self):
         yield from self.ants
-
-    def update_best_ant(self):
-        for ant in self.ants:
-            if ant.get_distance_travelled() < self.best_ant.get_distance_travelled():
-                self.best_ant = ant
 
 
 class ACO:
@@ -136,11 +145,14 @@ class ACO:
 
     def update_pheromones(self, evaporation_rate: float):
         """Update pheromone trail values based on distance travelled."""
-        for x in range(self.node_count):
-            for y in range(self.node_count):
-                self.pheromones[x, y] *= evaporation_rate
+        for i in range(self.node_count):
+            for j in range(self.node_count):
+                self.pheromones[i, j] *= 1 - evaporation_rate
                 for ant in self.colony:
-                    self.pheromones[x, y] += 1 / ant.get_distance_travelled()
+                    if ant.visit_matrix[i, j]:
+                        v = 1 / ant.get_distance_travelled()
+                        self.pheromones[i, j] += v
+                        self.pheromones[j, i] += v
         return self.pheromones
 
     def solve(
@@ -151,15 +163,69 @@ class ACO:
         alpha: int = 1,
         beta: int = 1,
         random_factor: float = 0.3,
+        save_plots: bool = False,
     ):
         """Runs ACO algorithm."""
-        for _ in range(total_iterations):
+        best_ant = None
+        for i in range(total_iterations):
             self.create_colony(ants_factor)
             for _ in range(self.node_count - 1):
                 self.move_ants(random_factor, alpha, beta)
             self.update_pheromones(evaporation_rate)
-            self.colony.update_best_ant()
-        return self.colony.best_ant
+            print(i, np.max(self.pheromones))
+
+            for ant in self.colony:
+                if best_ant is None:
+                    best_ant = ant
+                elif ant.get_distance_travelled() < best_ant.get_distance_travelled():
+                    best_ant = ant
+
+            if save_plots:
+                self.plot(f"output/ants_{i}.png")
+
+        if save_plots:
+            for i in range(24 * 5):
+                self.plot_solution(best_ant, f"output/ants_{total_iterations + i}.png")
+
+        return best_ant
+
+    def plot(self, output: str = None):
+        """Plot graph. Edge color determined by pheromone intensity."""
+        pheromones_norm = self.pheromones.copy()
+        # pheromones_norm /= np.max(pheromones_norm)
+        pheromones_norm *= 255
+
+        plt.figure()
+        for i in range(len(self.nodes)):
+            for j in range(len(self.nodes)):
+                x1, y1 = self.nodes[i]
+                x2, y2 = self.nodes[j]
+                c = round(max(pheromones_norm[i, j], pheromones_norm[j, i]))
+                plt.plot(
+                    [x1, x2], [y1, y2], c=f"C{c}",
+                )
+        sns.scatterplot(*zip(*self.nodes))
+        if output is not None:
+            plt.savefig(output, dpi=100)
+        else:
+            plt.show()
+
+    def plot_solution(self, ant: Ant, output: str = None):
+        """Plot solution graph."""
+        plt.figure()
+        for i in range(len(self.nodes)):
+            for j in range(len(self.nodes)):
+                x1, y1 = self.nodes[i]
+                x2, y2 = self.nodes[j]
+                c = 1000 if ant.visit_matrix[i, j] or ant.visit_matrix[j, i] else 0
+                plt.plot(
+                    [x1, x2], [y1, y2], c=f"C{c}",
+                )
+        sns.scatterplot(*zip(*self.nodes))
+        if output is not None:
+            plt.savefig(output, dpi=100)
+        else:
+            plt.show()
 
 
 @dataclass
@@ -173,6 +239,7 @@ class Config:
     random_factor: float = 0.3
     alpha: int = 1
     beta: int = 1
+    save_plots: bool = False
 
 
 def distance(node_a: Node, node_b: Node):
@@ -183,15 +250,17 @@ def distance(node_a: Node, node_b: Node):
 if __name__ == "__main__":
     config = Config(
         node_count=10,
-        max=100,
+        max=1000,
         total_iterations=500,
-        evaporation_rate=0.5,
+        evaporation_rate=0.3,
         ants_factor=0.5,
         random_factor=0.3,
-        alpha=1,
-        beta=1,
+        alpha=4,
+        beta=7,
+        save_plots=True,
     )
 
+    sns.set_theme(style="dark", palette="viridis")
     aco = ACO(config.node_count, config.min, config.max)
     solution = aco.solve(
         config.total_iterations,
@@ -200,7 +269,10 @@ if __name__ == "__main__":
         config.alpha,
         config.beta,
         config.random_factor,
+        config.save_plots,
     )
-    print(aco.nodes)
+
+    subprocess.run(["ffmpeg", "-y", "-framerate", "12", "-i", "output/ants_%d.png", "output.mp4"])
+
     print(solution)
     print(solution.get_distance_travelled())
